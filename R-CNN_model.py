@@ -15,10 +15,12 @@ import pandas as pd
 from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
 
+
 if getattr(sys, 'frozen', False):
     base_path = sys._MEIPASS
 else:
     base_path = r"C:\Users\korot\Desktop\setup"
+
 
 MODEL_WEIGHTS_PATH = os.path.join(base_path, "best_maskrcnn_model.pth")
 SAVE_DIR = os.path.join(base_path, "results")
@@ -27,17 +29,10 @@ DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 
 def y(x):
-    term1 = (-0.0272) * x ** 2 + 21.2679 * x + 417.8916
-    ln2 = math.log(2)
-    pi = math.pi
-    c2 = np.sqrt(ln2 / pi) * (472109.2805 / (-111.3544))
-    exp2 = np.exp(-ln2 * (x - 301.8109) ** 2 / 111.3544 ** 2)
-    term2 = c2 * exp2
-    exp3 = np.exp(-ln2 * (x - 255.2687) ** 2 / 45.668 ** 2)
-    term3 = (-271.0578) * exp3
-    exp4 = np.exp(-ln2 * (x - 225) ** 2 / 107.3193 ** 2)
-    term4 = (-2 * ln2 * (-136677.1368) * (x - 225) * exp4) / 107.3193 ** 2
-    result = term1 + term2 + term3 + term4
+    a = 6.94441
+    b = -6.17774
+    c = 379.2784
+    result = a * x ** 2 + b * x + c
     if result < 0:
         return float('nan')
     return result
@@ -49,11 +44,15 @@ def get_sbh_in_m2(x):
     return sbh_m2
 
 
-def calculate_V(sbh, a, c, c1, kf):
-    if sbh + c1 < 0:
+def calculate_V(Sbh_m2, c=1.27, a=0.246, c1=9.2, Kf=0.52):
+    if Sbh_m2 <= 0:
         return float('nan')
-    V = sbh * (a * c * 1.128 * np.sqrt(sbh + c1)) * kf * 0.9
-    return V
+    d_1_3 = 2 * math.sqrt(Sbh_m2 / math.pi)
+    d_1_3_cm = d_1_3 * 100
+    d_k = c * d_1_3_cm
+    l_x = a * d_k + c1
+    V_x = (math.pi * d_1_3 ** 2 / 4) * l_x * Kf
+    return V_x
 
 
 def load_model(num_classes=2):
@@ -212,15 +211,16 @@ class CrownSegmentationApp(tk.Tk):
             return
         try:
             height_m = float(self.entry_height.get())
+            corrected_height_m = height_m / 2
             if height_m <= 0:
                 raise ValueError()
         except ValueError:
             messagebox.showerror("Ошибка", "Введите корректное положительное число для высоты съемки")
             return
 
-        horizontal_coverage_m = 100
+        horizontal_coverage_m = height_m
         img_w, img_h = self.image.size
-        pixel_size_m = horizontal_coverage_m / img_w
+        pixel_size_m = corrected_height_m / img_w
         PIXEL_TO_M2 = pixel_size_m ** 2
 
         max_size = 1024
@@ -246,14 +246,13 @@ class CrownSegmentationApp(tk.Tk):
 
         threshold = 0.5
         keep = scores >= threshold
-
         masks = masks[keep]
         boxes = boxes[keep]
 
         pil_result = self.image.copy()
         draw = ImageDraw.Draw(pil_result)
         try:
-            font = ImageFont.truetype("arial.ttf", 16)
+            font = ImageFont.truetype("arial.ttf", 50)
         except:
             font = ImageFont.load_default()
 
@@ -278,19 +277,38 @@ class CrownSegmentationApp(tk.Tk):
             y_rel = center_y / img_h
             lat, lon = self.coords_to_latlon(x_rel, y_rel)
 
-            crown_pixels = np.count_nonzero(mask_resized)
-            area_m2 = crown_pixels * PIXEL_TO_M2
+            # Восстановление определения площади кроны через контур и масштаб
+            mask_uint8 = (mask_resized.astype(np.uint8)) * 255
+            contours, _ = cv2.findContours(mask_uint8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            if len(contours) == 0:
+                continue
+
+            contour = max(contours, key=cv2.contourArea)
+            contour = contour.squeeze()
+            if contour.ndim != 2 or contour.shape[0] < 3:
+                continue
+
+            x = contour[:, 0]
+            y = contour[:, 1]
+            area_px = 0.5 * np.abs(np.dot(x, np.roll(y, 1)) - np.dot(y, np.roll(x, 1)))
+
+            # Перевод площади в м²
+            area_m2 = area_px * (pixel_size_m ** 2)
+
+            if area_m2 > 23:
+                print(f"Крона {i} отвергнута из-за подозрительно большой площади: {area_m2:.2f} м²")
+                continue
 
             sbh_m2 = get_sbh_in_m2(area_m2)
-            a, c, c1, Kf = 0.246, 1.27, 9.2, 0.52
-            V = calculate_V(sbh_m2, a, c, c1, Kf) if sbh_m2 and not np.isnan(sbh_m2) else float('nan')
+            sbh_m2 *=1.7
+            V = calculate_V(sbh_m2) if sbh_m2 and not np.isnan(sbh_m2) else float('nan')
 
-            print(f"Crown {i}: Площадь кроны (м²): {area_m2:.4f}, Сечение ствола (м²): {sbh_m2:.6f}, Объем (м³): {V if not np.isnan(V) else 'NaN'}, Широта: {lat}, Долгота: {lon}")
+            print(f"Crown {i}: Площадь кроны (м²): {area_m2:.4f}, Сечение ствола (м²): {sbh_m2:.6f}, Объем (м³): {V if not math.isnan(V) else 'NaN'}, Широта: {lat}, Долгота: {lon}")
 
             self.crown_data.append({
                 "Номер кроны": i,
                 "Площадь кроны (м²)": round(area_m2, 4),
-                "Объем древесины (м³)": round(V, 4) if not np.isnan(V) else None,
+                "Объем древесины (м³)": round(V, 4) if not math.isnan(V) else None,
                 "Широта": round(lat, 6) if lat is not None else None,
                 "Долгота": round(lon, 6) if lon is not None else None,
             })
@@ -304,7 +322,6 @@ class CrownSegmentationApp(tk.Tk):
         if self.result_img is None:
             messagebox.showwarning("Внимание", "Сначала выполните сегментацию!")
             return
-        # Заглушка для удаления артефактов
         messagebox.showinfo("Редактирование", f"Удаление артефактов для породы: {self.combobox_species.get()} ещё не реализовано.")
 
     def save_result(self):
