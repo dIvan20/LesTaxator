@@ -105,7 +105,7 @@ class CrownSegmentationApp(tk.Tk):
         tk.Label(self.left_frame, text="Выбор породы:", font=label_font, bg="#f0f0f0").pack(pady=(0, 5))
         tree_species = ["Авто", "Сосна сибирская", "Ель, пихта", "Береза"]
         self.combobox_species = ttk.Combobox(self.left_frame, values=tree_species, font=label_font, state="readonly")
-        self.combobox_species.current(1)  # По умолчанию "Сосна сибирская"
+        self.combobox_species.current(1) 
         self.combobox_species.pack(pady=(0, 20), fill=tk.X, padx=10)
 
         tk.Label(self.left_frame, text="Координаты углов изображения (широта, долгота)", font=label_font, bg="#f0f0f0").pack(pady=(10, 5))
@@ -277,7 +277,6 @@ class CrownSegmentationApp(tk.Tk):
             y_rel = center_y / img_h
             lat, lon = self.coords_to_latlon(x_rel, y_rel)
 
-            # Восстановление определения площади кроны через контур и масштаб
             mask_uint8 = (mask_resized.astype(np.uint8)) * 255
             contours, _ = cv2.findContours(mask_uint8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             if len(contours) == 0:
@@ -292,7 +291,6 @@ class CrownSegmentationApp(tk.Tk):
             y = contour[:, 1]
             area_px = 0.5 * np.abs(np.dot(x, np.roll(y, 1)) - np.dot(y, np.roll(x, 1)))
 
-            # Перевод площади в м²
             area_m2 = area_px * (pixel_size_m ** 2)
 
             if area_m2 > 23:
